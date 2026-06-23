@@ -34,21 +34,23 @@ The app starts on `http://localhost:8080`.
 
 ## API endpoints
 
-The bank endpoints live under `/account`. Amounts are sent as JSON.
+All endpoints require login (session form login). The `/account` endpoints act
+on the **logged-in user's own** account; `/admin` endpoints require the `ADMIN`
+role. Responses are JSON like `{ "balance": 150.00 }`.
 
-| Method | Path | Body | Description |
-|--------|------|------|-------------|
-| `GET`  | `/account/balance` | — | Current balance |
-| `POST` | `/account/deposit` | `{ "amount": 100 }` | Add money |
-| `POST` | `/account/withdraw` | `{ "amount": 50 }` | Remove money (rejects overdraft) |
+| Method | Path | Body | Access | Description |
+|--------|------|------|--------|-------------|
+| `GET`  | `/account/balance` | — | any logged-in user | Your balance |
+| `POST` | `/account/deposit` | `{ "amount": 100 }` | any logged-in user | Add money (amount must be positive → 400) |
+| `POST` | `/account/withdraw` | `{ "amount": 50 }` | any logged-in user | Remove money (overdraft → 409) |
+| `GET`  | `/admin/accounts/{username}/balance` | — | `ADMIN` only | Read any user's balance (403 for non-admins) |
 
-Example:
+Demo users (created on startup): `alice` / `password` (USER, starts at 100.00)
+and `admin` / `admin` (ADMIN).
 
-```bash
-curl -X POST http://localhost:8080/account/deposit \
-     -H "Content-Type: application/json" \
-     -d '{ "amount": 100 }'
-```
+Because state-changing requests are CSRF-protected, the simplest way to try the
+API is to log in through the browser at `http://localhost:8080/login`, where the
+login form and CSRF token are handled for you.
 
 ## Database
 
@@ -65,11 +67,14 @@ Use JDBC URL `jdbc:h2:file:./data/bankdb`, user `sa`, no password.
 
 ```
 src/main/java/com/example/myfirstwebapp/
-├── controller/   REST endpoints (BankAccountController)
+├── controller/   REST endpoints (BankAccountController, AdminAccountController)
 ├── service/      business rules (BankAccountService)
 ├── repository/   Spring Data JPA repositories
 ├── entity/       JPA entities (AppUser, Account)
-└── dto/          request bodies (TransactionRequest)
+├── dto/          request/response bodies (TransactionRequest, BalanceResponse)
+├── security/     UserDetailsService backed by the database
+├── config/       SecurityConfig + DataSeeder
+└── exception/    GlobalExceptionHandler (maps errors to HTTP status codes)
 
 docs/             architecture notes and ADRs
 ```
@@ -78,14 +83,11 @@ docs/             architecture notes and ADRs
 
 - [x] **Phase 1** — JPA persistence layer: `AppUser` / `Account` entities,
       repositories, and a `BankAccountService` (BigDecimal, validation), test-first.
-- [ ] **Phase 2** — Login: Spring Security session form login, DB-backed users
+- [x] **Phase 2** — Login: Spring Security session form login, DB-backed users
       with BCrypt ([ADR-002](docs/adr/0002-use-session-form-login.md)).
-- [ ] **Phase 3** — Authorization: roles + per-account ownership; wire the
-      controller to the logged-in user ([ADR-003](docs/adr/0003-roles-plus-ownership-authorization.md)).
-
-> Note: the persistence layer is built and tested, but the controller still uses
-> a temporary in-memory balance — it is wired to the database and the logged-in
-> user in Phase 3.
+- [x] **Phase 3** — Authorization: roles + per-account ownership; controller
+      wired to the logged-in user, role-gated `/admin` endpoints, and validation
+      ([ADR-003](docs/adr/0003-roles-plus-ownership-authorization.md)).
 
 ## Architecture & decisions
 

@@ -1,5 +1,7 @@
 package com.example.myfirstwebapp.controller;
 
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -7,82 +9,77 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Tests the current behavior of {@link BankAccountController}.
- *
- * The controller stores the balance in an instance field, and @WebMvcTest
- * reuses one controller instance across methods. @DirtiesContext rebuilds the
- * context (and so resets the balance to 0.0) before each test, keeping them
- * independent of execution order.
+ * End-to-end tests for the per-user account endpoints. Runs against the full
+ * app with the seeded user "alice" (starts at 100.00). @Transactional rolls back
+ * each test's balance changes so methods stay independent.
  */
-@WebMvcTest(BankAccountController.class)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_EACH_TEST_METHOD)
+@SpringBootTest
+@AutoConfigureMockMvc
+@Transactional
 class BankAccountControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
 
     @Test
-    void balanceStartsAtZero() throws Exception {
+    void unauthenticatedRequestIsRejected() throws Exception {
         mockMvc.perform(get("/account/balance"))
-                .andExpect(status().isOk())
-                .andExpect(content().string("Current balance: 0.0"));
+                .andExpect(status().is3xxRedirection());
     }
 
     @Test
-    void depositIncreasesBalance() throws Exception {
-        mockMvc.perform(post("/account/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"amount\": 100}"))
+    void balanceReturnsOwnAccountBalance() throws Exception {
+        mockMvc.perform(get("/account/balance").with(user("alice").roles("USER")))
                 .andExpect(status().isOk())
-                .andExpect(content().string("Deposited 100.0. New balance: 100.0"));
-
-        mockMvc.perform(get("/account/balance"))
-                .andExpect(content().string("Current balance: 100.0"));
+                .andExpect(content().json("{\"balance\":100.00}"));
     }
 
     @Test
-    void depositRejectsNonPositiveAmount() throws Exception {
-        mockMvc.perform(post("/account/deposit")
+    void depositIncreasesOwnBalance() throws Exception {
+        mockMvc.perform(post("/account/deposit").with(user("alice").roles("USER")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"amount\": -5}"))
+                        .content("{\"amount\":50.00}"))
                 .andExpect(status().isOk())
-                .andExpect(content().string("Deposit amount must be positive."));
+                .andExpect(content().json("{\"balance\":150.00}"));
     }
 
     @Test
-    void withdrawDecreasesBalance() throws Exception {
-        mockMvc.perform(post("/account/deposit")
+    void withdrawDecreasesOwnBalance() throws Exception {
+        mockMvc.perform(post("/account/withdraw").with(user("alice").roles("USER")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"amount\": 100}"));
-
-        mockMvc.perform(post("/account/withdraw")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"amount\": 30}"))
+                        .content("{\"amount\":30.00}"))
                 .andExpect(status().isOk())
-                .andExpect(content().string("Withdrew 30.0. New balance: 70.0"));
+                .andExpect(content().json("{\"balance\":70.00}"));
     }
 
     @Test
-    void withdrawRejectsInsufficientFunds() throws Exception {
-        mockMvc.perform(post("/account/withdraw")
+    void depositRejectsNonPositiveAmountWith400() throws Exception {
+        mockMvc.perform(post("/account/deposit").with(user("alice").roles("USER")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"amount\": 50}"))
-                .andExpect(status().isOk())
-                .andExpect(content().string("Insufficient funds. Current balance: 0.0"));
+                        .content("{\"amount\":-5}"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
-    void withdrawRejectsNonPositiveAmount() throws Exception {
-        mockMvc.perform(post("/account/withdraw")
+    void withdrawBeyondBalanceReturns409() throws Exception {
+        mockMvc.perform(post("/account/withdraw").with(user("alice").roles("USER")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"amount\": 0}"))
-                .andExpect(status().isOk())
-                .andExpect(content().string("Withdrawal amount must be positive."));
+                        .content("{\"amount\":1000}"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void postWithoutCsrfTokenIsForbidden() throws Exception {
+        mockMvc.perform(post("/account/deposit").with(user("alice").roles("USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":50.00}"))
+                .andExpect(status().isForbidden());
     }
 }
